@@ -1,6 +1,6 @@
 # R Site Generator
 
-## Set up your directory.
+## How to use the generator. 
 
 The markdown folder contains one one subfolder for each category of page you want on the index page of the site. Each subfolder must has one markdown file per page you want on the site. The markdown files should start with a  `+1` or `+2` or some other number. This is used for ordering pages (larger numbers are placed higher up) within a subgroup. Then there should be a single blank line and then a header `# Title`. This header will be used as the title of the page on the index.
 
