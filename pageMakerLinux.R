@@ -1,26 +1,63 @@
-library(knitr)
 library(fs)
-library(stringr)
-library(dplyr)
-library(stringi)
-library(magrittr)
-library(txtplot)
-library(gtrendsR)
 
-list.dirs <- function(path = ".",
-                      pattern = NULL,
-                      all.dirs = FALSE,
-                      full.names = FALSE,
-                      ignore.case = FALSE) {
-  # use full.names=TRUE to pass to file.info
-  all <- list.files(path,
-                    pattern,
-                    all.dirs,
-                    full.names = TRUE,
-                    recursive = FALSE,
-                    ignore.case)
+
+
+headHtml <- '
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+    <title>
+    $TITLE
+    </title>
+    <style type="text/css">
+    $STYLE
+    </style>
+    </head>
+    <body>
+    '
+
+footHtml <- '
+  </body>
+  </html>
+'
+
+
+
+myKnitToHtml <- function (input,output,stylesheet,title) {
+  htmlText <- c(headHtml,input,footHtml,collapse="")
+  print(title)
+  replacements <- list(
+    c("^### (.*)$","\n<h3>\\1</h3><BR>"),
+    c("^## (.*)$","<h2>\\1</h2><BR>"),
+    c("^# (.*)$","<h1>\\1</h1><BR>"),
+    c("```","<pre>"),
+    c("'''","</pre>"),
+    c("`(.*?)`","<code>\\1</code>"),
+    c("\\*\\*(.*?)\\*\\*","<b>\\1</b>"),
+    c("\\*(.*)\\*","<i>\\1</i>"),
+    c("\\[\\!(.*?)\\]\\((.*?)\\)\\]\\((.*?)\\)","<a href='\\3'><img src='\\2' alt='\\1'></a>"),
+    c("\\!\\[(.*?)\\]\\((.*?)\\)","<img alt='\\1' src='\\2'>"),
+    c("[^!]?\\[(.*?)\\]\\((.*?)\\)"," <a href='\\2'>\\1</a>"),
+    c("  $","<BR>"),
+    c("\\$TITLE",title),
+    c("\\$STYLE",readChar(stylesheet,file.info(stylesheet)$size))  
+  )
+  
+  for(replacement in replacements){
+    replacement <- unlist(replacement)
+    htmlText <- gsub(replacement[1],replacement[2],htmlText)
+  }
+  
+  
+  
+  
+  write(htmlText,output)
+}
+
+list.dirs <- function(path = ".",pattern = NULL,all.dirs = FALSE,full.names = FALSE,ignore.case = FALSE) {
+  all <- list.files(path,pattern,all.dirs,full.names = TRUE,recursive = FALSE,ignore.case)
   dirs <- all[file.info(all)$isdir]
-  # determine whether to return full names or just dir names
   if (isTRUE(full.names))
     return(dirs)
   else
@@ -37,35 +74,24 @@ getFolders <- function(directory) {
 getFiles <- function(folder, directory) {
   markdownDirectory = paste(c(directory, "/markdown"), collapse = "")
   staticDirectory = paste(c(directory, "/static"), collapse = "")
-  currentDirectoryMarkdown = paste(c(markdownDirectory, "/", folder), collapse =
-                                     "")
-  currentDirectory = paste(c(staticDirectory, "/", folder), collapse =
-                             "")
+  currentDirectoryMarkdown = paste(c(markdownDirectory, "/", folder), collapse ="")
+  currentDirectory = paste(c(staticDirectory, "/", folder), collapse ="")
   temp = list.files(currentDirectoryMarkdown, pattern = "*.md$")
-  temp
 }
 
 #Extract Page Title from File
-getTitle <- function(file) {
-  pageTitle <- str_extract(readChar(file, 500), regex("# .*"))
-  pageTitle <- substring(pageTitle, 3)
+getTitle <- function(fileMarkdownPath) {
+  content <- readLines(fileMarkdownPath,n=3)
+  titleLine <- content[3]
+  pageTitle <- substring(titleLine, 3) 
   pageTitle
 }
 
-
-#Extract Page Title from File
-getPriority <- function(file) {
-  priority <- str_extract(readChar(file, 10), regex("[0-9]{1,10}"))
-  priority
-}
-
-
-#Add a "back" link to each page.
-addBack <- function(fileInfo){
-  content <- fileInfo$content
-  content <- paste("[Back](../index.html)  \n\n\n", content, collapse = "")
-  fileInfo$content <- content
-  fileInfo
+getPriority <- function(fileMarkdownPath){
+  content <- readLines(fileMarkdownPath,n=1)
+  priorityLine <- content[1]
+  priority <- substring(priorityLine, 2)
+  as.numeric(priority)
 }
 
 #Setup the Static Folder
@@ -80,18 +106,10 @@ setupStatic <- function(directory, folders) {
   sapply(folders, makeStaticFolder, directory = directory)
 }
 
-
-
 #Setup the Temp Folder
 setupTemp <- function(directory) {
   tempDirectory = paste(c(directory, "/temp"), collapse = "")
   dir.create(tempDirectory)
-}
-
-#Setup the Temp Folder
-setupGopher <- function(directory) {
-  gopherDirectory = paste(c(directory, "/gopher"), collapse = "")
-  dir.create(gopherDirectory)
 }
 
 #Get Full Path to Markdown File
@@ -115,15 +133,15 @@ getStaticPath <- function(file, folder, directory) {
 
 
 #Make a Link to the Static File in Markdown Format
-makeLink <- function(fileInfo) {
-    paste(c(
+makeLink <- function(fileData) {
+  paste(c(
     "[",
-    fileInfo$title,
+    fileData$title,
     "](",
-    fileInfo$folder,
+    fileData$folder,
     "/",
-    substr(as.character(fileInfo$fileName), 1, nchar(as.character(fileInfo$fileName)) - 2),
-    "html)\n"
+    substr(as.character(fileData$fileName), 1, nchar(as.character(fileData$fileName)) - 2),
+    "html)<BR>\n"
   ),
   collapse = "")
 }
@@ -131,109 +149,92 @@ makeLink <- function(fileInfo) {
 
 #Create the Index Page
 makeIndex <- function(fileData,pageTitle,indexHeader) {
-  
   indexHeaderPath <-  paste(directory, "/markdown/indexHeader.md", sep = "")
   indexHeader <-  readChar(indexHeaderPath, file.info(indexHeaderPath)$size)
-  indexText <- indexHeader
-  folders <- fileData %>% pull(folder) %>% unique
+  indexLines <- indexHeader
+  folders <- unique(fileData$folder)
   for(currentFolder in folders){
     folderName <- substring(currentFolder,3)
-    folderName <- str_replace(folderName,"_"," ")
-    indexText <- c(indexText,paste("## ",toupper(folderName),sep=""))
-    subsetFiles <- fileData %>% filter(folder==currentFolder) %>% arrange(desc(priority))
+    folderName <- gsub("_"," ",folderName,fixed=TRUE)
+    indexLines <- c(indexLines,paste("## ",toupper(folderName),sep=""))
+    folderHeaderPath <-  paste(directory,"/markdown/",currentFolder, "/header.md", sep = "")
+    folderHeader <-  readChar(folderHeaderPath, file.info(folderHeaderPath)$size)
+    if(nchar(folderHeader)>0){indexLines <- c(indexLines,folderHeader,"<BR>")}
+    subsetFiles <-  fileData[which(fileData$folder==currentFolder),]
+    
+    subsetFiles <- subsetFiles[order(subsetFiles$priority,decreasing = TRUE),]
+    
     for(i in 1:dim(subsetFiles)[1]){
-      print(subsetFiles[i,])
-      indexText <- c(indexText,makeLink(subsetFiles[i,]))
+      indexLines <- c(indexLines,makeLink(subsetFiles[i,]))
     }
   }
-  indexText <- c(indexText,"```",timestamp(),"```")
-  writeLines(indexText, paste(directory, "/markdown/index.md", sep = ""))
-  knit2html(
-    paste(directory, "/markdown/index.md", sep = ""),
-    paste(directory, "/static/index.md", sep = ""),
+  timeStamp <- paste0("```",timestamp(),"```")
+  indexLines <- c(indexLines,timeStamp)
+  
+  myKnitToHtml(
+    indexLines,
+    paste(directory, "/static/index.html", sep = ""),
     stylesheet = style,
     title=pageTitle
   )
 }
 
 #Create the Index Page
-makeGophermap <- function(fileData,pageTitle,indexHeader) {
-  
-  gopherHeaderPath <-  paste(directory, "/markdown/gopherHeader.md", sep = "")
-  gopherHeader <-  readChar(gopherHeaderPath, file.info(gopherHeaderPath)$size)
-  gopherText <- gopherHeader
-  
-  terms = c("gopher","gemini")
-  
-  for(term in terms){
-    df <-gtrends(term,time="all",onlyInterest = TRUE)
-    gopherText <- c(gopherText,paste0("$$ Interest in ",term," over time. $$"))
-    gopherText <- c(gopherText,capture.output(txtplot(as.numeric(df$interest_over_time[,1]),df$interest_over_time[,2],ylab="Interest",xlab="Unix Epoch on January 1st, 1970 at UTC.")))
-    gopherText <- c(gopherText," ")
-  }
 
-  writeLines(gopherText, paste(directory, "/gopher/gophermap", sep = ""))
-}
 
-#Add a "back" link to each page.
-addBack <- function(fileInfo){
-  headerPath <- paste(directory, "/markdown/header.md", sep = "")
-  header <- readChar(headerPath, file.info(headerPath)$size)
-  content <- fileInfo$content
-  content <- paste(header, content, collapse = "")
-  fileInfo$content <- content
-  fileInfo
-}
 
 #Create an HTML Page from Markdown File
-makeHtml <- function(fileInfo,style,directory) {
-  message("Making",fileInfo$title)
-  fileInfo <- addBack(fileInfo)
-  tempFile <- paste(directory, "/temp/temp.md", sep = "")
-  writeLines(fileInfo$content, tempFile, sep = "")
-  knit2html(tempFile, output=fileInfo$fullStaticPath, stylesheet = style)
-  setwd(directory)
+makeHtml <- function(fileData,style) {
+  
+  content <- readLines(fileData$fullMarkdownPath)[-1]
+  content[1] <- "[Back](../index.html)<BR>"
+  myKnitToHtml(content, output=fileData$fullStaticPath, stylesheet = style,title=fileData$title)
 }
 
 
 
 
-#Remove Priority String
-removePriority <- function(content){
-  content <- str_remove(content,"[+][0-9]{1,10}")
-  content
-}
 
 
 #Parse the files and make a dataframe with relevant file info. 
 makeFileData <- function(directory){
+  
   fileName=c()
   folder=c()
   fullMarkdownPath=c()
   fullStaticPath=c()
   title=c()
-  content=c()
-  priority <- c()
+  priority=c()
+  
   folders <- getFolders(directory)
+  
   for (fileFolder in folders) {
     files <- getFiles(fileFolder, directory)
+    
     for(file in files){
-      fileMarkdownPath <- getMarkdownPath(file,fileFolder,directory)
-      fileStaticPath <- getStaticPath(file,fileFolder,directory)
-      fileTitle <- getTitle(fileMarkdownPath)  
-      filePriority <- as.numeric(getPriority(fileMarkdownPath))
-      fileContent <- readChar(fileMarkdownPath, file.info(fileMarkdownPath)$size)
-      fileContent <- removePriority(fileContent)
-      priority <- c(priority,filePriority)
-      fileName <- c(fileName,file)
-      folder <- c(folder,fileFolder)
-      fullMarkdownPath <- c(fullMarkdownPath,fileMarkdownPath)
-      fullStaticPath <- c(fullStaticPath,fileStaticPath)
-      title <- c(title,fileTitle)
-      content <- c(content,fileContent)
+      
+      if(file == "header.md"){}
+      
+      else{
+        fileName <- c(fileName,file)
+        folder <- c(folder,fileFolder)
+        
+        fileMarkdownPath <- getMarkdownPath(file,fileFolder,directory)
+        fullMarkdownPath <- c(fullMarkdownPath,fileMarkdownPath)
+        
+        fileStaticPath <- getStaticPath(file,fileFolder,directory)
+        fullStaticPath <- c(fullStaticPath,fileStaticPath)
+        
+        fileTitle <- getTitle(fileMarkdownPath)
+        title <- c(title,fileTitle)
+        
+        filePriority <- getPriority(fileMarkdownPath)
+        priority <- c(priority,filePriority)
+      }
+      
     }
   }
-  return(data.frame(fileName = fileName,folder = folder,fullMarkdownPath = fullMarkdownPath,fullStaticPath = fullStaticPath,title = title,priority = priority,content = content,stringsAsFactors=FALSE))
+  return(data.frame(fileName = fileName,folder = folder,fullMarkdownPath = fullMarkdownPath,fullStaticPath = fullStaticPath,title = title,priority = priority,stringsAsFactors=FALSE))
 }
 
 
@@ -244,7 +245,6 @@ setupSite <- function(directory){
   folders <- getFolders(directory)
   setupTemp(directory)
   setupStatic(directory, folders)
-  setupGopher(directory)
 }
 
 
@@ -254,25 +254,20 @@ makePage <- function(directory, style,pageTitle,indexHeader) {
   setupSite(directory)
   print("Getting File Data")
   fileData <- makeFileData(directory)
+  
   for(i in 1:dim(fileData)[1]){
-    print("Setting up Page")
-    print(fileData[i,]$title)
-    makeHtml(fileData[i,],style = style,directory=directory)
+    
+    print(paste0("Setting up Page ",fileData[i,]$title))
+    makeHtml(fileData[i,],style)
   }
   print("Making Index")
   makeIndex(fileData,pageTitle)
-  makeGophermap()
 }
-
-#Set it up. Make it go.
-#directory = dirname(sys.frame(1)$ofile)
-#setwd(directory)
-
-# Local Building
 
 directory = getwd()
 
 
 style = paste(c(directory,"/style/style.css"),collapse="")
-makePage(directory,style,"Greg Leo")
+makePage(directory,style,"Page Title")
+
 

@@ -9,3 +9,22 @@ The markdown folder should also contain a file called header.md which will be pl
 The global page stylesheet (css) file is in the /style subdirectory. Static files can be places in the /static directory.
 
 To generate your site, run the pageMakerLinux.R code. 
+
+## What's Supported?
+
+```
+# Header 1
+## Header 2
+### Header 3
+*Italics*
+**Bold**
+`Inline Preformatted Text`
+
+```
+Code Blocks (Note these end in ''' instead of ```). 
+'''
+
+[Links](Google.com)
+![Images](image.png)
+![[Images as Links](image.png)](Google)
+```
